@@ -2,4 +2,6 @@
 
 crontab -l 2>/dev/null| sed -e  's/user_catlike/user_catLike/g' | crontab -
 rm /home/hadoop/caishi/local/task/hivesql/user_catlike.sh
+touch /home/hadoop/caishi/log/hadoop/user_catLike.sh.log
+rm /home/hadoop/caishi/log/hadoop/user_catlike.sh.log
 

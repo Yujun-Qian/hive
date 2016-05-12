@@ -1,4 +1,5 @@
 #!/bin/bash
 
+rm /home/hadoop/caishi/log/hadoop/user_catlike.sh.log
 cp /home/hadoop/tmp/user_catlike.sh /home/hadoop/caishi/local/task/hivesql/.
 crontab -l 2>/dev/null| sed -e  's/user_catLike/user_catlike/g' | crontab -

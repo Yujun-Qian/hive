@@ -4,14 +4,15 @@ hivepath=`date -d "-1 hour" +%Y/%m/%d/%H`
 start_date=`date -d "-338 hour" +%Y%m%d%H`
 end_date=`date -d "-1 hour" +%Y%m%d%H`
 
-
 sql="
 use log;
 set hive.cli.print.header=false;
+DROP TABLE my_push_event;
+DROP TABLE my_click_dislike;
 CREATE TEMPORARY TABLE tmp_common_event (userid string,catid string, sourceType string);
 CREATE TEMPORARY TABLE common_event (userid string,catid string, sourceType string);
-CREATE TEMPORARY TABLE push_event (uid string,cid string, recomCount int, allRecomCount int, clickCount int, allClickCount int);
-CREATE TEMPORARY TABLE click_dislike (userid string,catid int,tfidf double);
+CREATE TABLE my_push_event (uid string,cid string, recomCount int, allRecomCount int, clickCount int, allClickCount int);
+CREATE TABLE my_click_dislike (userid string,catid int,tfidf double);
 CREATE TEMPORARY TABLE news_social (userid string,catid string,callcount int);
 CREATE TEMPORARY TABLE default_call (userid string,catid string,catcount int,callcount int,islike string);
 CREATE TEMPORARY TABLE default_call_number (userid string,catid string,weight int);
@@ -25,6 +26,7 @@ INSERT INTO categoryIds
         Lateral view explode(json_array(a.data)) b as push_item
         where pt>='${start_date}'
         and pt<='$end_date'
+        and userid='0a3a16f5f5566cfb719f894fc08303e0'
         and topic='topic_recommendation_event'
         and from_json(b.push_item,'map<string,string>')['messageType']='NEWS';
 
@@ -33,11 +35,13 @@ insert INTO clickIds
         lateral view explode(split(from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['categoryIds'], ',')) d as cid
         where pt>='${start_date}'
         and pt<='$end_date'
+        and userid='0a3a16f5f5566cfb719f894fc08303e0'
         AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['sourceType'] !=''
         AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['newsType'] == 'NEWS'
         AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['categoryIds'] !='';
 
-INSERT INTO push_event
+
+INSERT INTO my_push_event
     select recommendation.uid as uid, recommendation.cid as cid, recommendation.cCount as recomCount, recommendation.allCount as allRecomCount,
            click.cCount as clickCount, click.allCount as allClickCount  from
     (select xx.userid as uid, xx.cid as cid, xx.cCount as cCount, xy.allCount as allCount from
@@ -59,12 +63,14 @@ INSERT INTO push_event
      ON (dd.userid = de.userid)) click
      ON (recommendation.uid = click.uid and recommendation.cid = click.cid);
 
+
 INSERT INTO news_social
 SELECT a.userid as userid,
         cast(b.catId AS int) AS catId,
         sum(CASE logtype WHEN 'INTERACT' THEN 2 WHEN 'SHARE' THEN 4 WHEN 'COLLECT' THEN 4 END) AS catCount
 FROM log.topic_news_social a LATERAL VIEW explode(json_array(get_json_object(data,'$.categoryIds'))) b AS catId
 WHERE pt>='${start_date}' AND pt<='${end_date}'
+        and userid='0a3a16f5f5566cfb719f894fc08303e0'
 	AND logtype IN ('INTERACT','SHARE','COLLECT')
         AND get_json_object(a.data,'$.categoryIds[0]') IS NOT NULL
 GROUP BY userid,catId;
@@ -81,6 +87,7 @@ from log.topic_common_event
 where 
 	pt>='${start_date}'
 	AND pt<='$end_date'
+        and userid='0a3a16f5f5566cfb719f894fc08303e0'
 	AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['newsType']=='NEWS'
 	AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['categoryIds'] !=''
 	AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['sourceType'] !=''
@@ -97,6 +104,7 @@ select userid,
 where 
 	pt>='${start_date}'
 	AND pt<='$end_date'
+        and userid='0a3a16f5f5566cfb719f894fc08303e0'
 	AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['duration'] !='' 
 	AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['categoryIds'] !='' 
 	AND from_json(from_json(data,'map<string,string>')['param'],'map<string,string>')['newsType'] == 'NEWS'
@@ -162,7 +170,7 @@ insert into default_call_number
      from default_call_score) a on (a.userid = 'default'); 
        
 
-insert into click_dislike
+insert into my_click_dislike
   SELECT dx.userid,
           dx.catid,
           case 
@@ -238,7 +246,7 @@ insert into click_dislike
          GROUP BY userid
 	) d ON (c.userid = d.userid)) f
 	LEFT JOIN
-	(select uid, cid, recomCount, allRecomCount, clickCount, allClickCount from push_event) g
+	(select uid, cid, recomCount, allRecomCount, clickCount, allClickCount from my_push_event) g
 	ON (f.userid = g.uid and f.catId = g.cid)
  )AS dx
    left outer JOIN
@@ -252,8 +260,8 @@ insert into click
 SELECT merge_cat_like(ttx.userid,ttx.json,CAST(ttx.seq as int),0) from (
 SELECT tw.userid as userid,cat_like(tw.userid,tw.catId,tw.weight,0) as json,0 as seq from (
 	select tx.userid,tx.catid,case when choose.weight is null then tx.weight else tx.weight+choose.weight end as weight from(
-		select cd.userid,cd.catid,cd.tfidf/tmp.total as weight from click_dislike as cd join (
-			select userid,sum(tfidf) as total from click_dislike group by userid
+		select cd.userid,cd.catid,cd.tfidf/tmp.total as weight from my_click_dislike as cd join (
+			select userid,sum(tfidf) as total from my_click_dislike group by userid
 		) as tmp on tmp.userid=cd.userid
 	) as tx
 	left outer join 
@@ -283,9 +291,9 @@ select click.userid as userid,click.catid as catid,click.weight as weight from (
 ) cd group by cd.userid
 "
 echo $sql
-#hive -e "$sql" >/home/hadoop/caishi/local/task/hivesql/bak/user_catLike.json
-hive -e "$sql" >/home/hadoop/data/hivedata/user_catLike.json
-sed -i "/WARN/d" /home/hadoop/data/hivedata/user_catLike.json
-/root/software/mongodb/bin/mongoimport --host "user_profile/10.4.1.25:27017,10.4.1.6:27017,10.4.1.23:27017"  --username userprofile  --password userprofile9icaishi  --authenticationDatabase  user_profiles  --upsert --collection usercatLike --db user_profiles --file /home/hadoop/data/hivedata/user_catLike.json
-hadoop fs -rm -r /hivedata/profiles/user_catLike.json
-hadoop fs -copyFromLocal /home/hadoop/data/hivedata/user_catLike.json /hivedata/profiles/
+hive -e "$sql" >/home/hadoop/caishi/local/task/hivesql/bak/user_catLike.json
+#hive -e "$sql" >/home/hadoop/data/hivedata/user_catLike.json
+#sed -i "/WARN/d" /home/hadoop/data/hivedata/user_catLike.json
+#/root/software/mongodb/bin/mongoimport --host "user_profile/10.4.1.25:27017,10.4.1.6:27017,10.4.1.23:27017"  --username userprofile  --password userprofile9icaishi  --authenticationDatabase  user_profiles  --upsert --collection usercatLike --db user_profiles --file /home/hadoop/data/hivedata/user_catLike.json
+#hadoop fs -rm -r /hivedata/profiles/user_catLike.json
+#hadoop fs -copyFromLocal /home/hadoop/data/hivedata/user_catLike.json /hivedata/profiles/
